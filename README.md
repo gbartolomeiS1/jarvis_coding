@@ -4,6 +4,8 @@
 
 # Welcome to HELIOS - HEC-enabled Event Log Inject & Orchestration System
 
+## Updated version of Helios/Jarvis Coding to  support both legacy raw path and the “replace /raw with /event and JSON body” mode when sending to HEC.
+
 ## HELIOS Frontend & Backend – Docker Quickstart
 
 This repository contains two services:
