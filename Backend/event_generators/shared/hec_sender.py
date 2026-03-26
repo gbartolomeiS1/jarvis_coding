@@ -4,6 +4,7 @@ import argparse, json, os, time, random, requests, importlib, sys
 import gzip, io, threading, queue
 from datetime import datetime
 from typing import Callable, Tuple, Optional
+import json
 
 # Add generator category paths to sys.path
 import os
@@ -1198,12 +1199,12 @@ def send_one(line, product: str, attr_fields: dict, event_time: float | None = N
     if env_event and env_raw:
         bases.append((env_event, env_raw))
     bases.extend([
-        ("https://ingest.us1.sentinelone.net/services/collector/event",
-         "https://ingest.us1.sentinelone.net/services/collector/raw"),
-        ("https://ingest.usea1.sentinelone.net/services/collector/event",
-         "https://ingest.usea1.sentinelone.net/services/collector/raw"),
-        ("https://ingest.sentinelone.net/services/collector/event",
-         "https://ingest.sentinelone.net/services/collector/raw"),
+        ("https://ingest.na1.sentinelone.net/services/collector/event",
+         "https://ingest.na1.sentinelone.net/services/collector/raw"),
+        ("https://ingest.na1.sentinelone.net/services/collector/event",
+         "https://ingest.na1.sentinelone.net/services/collector/raw"),
+        ("https://ingest.na1.sentinelone.net/services/collector/event",
+         "https://ingest.na1.sentinelone.net/services/collector/raw"),
     ])
 
     # Try verification/TLS combinations (secure → low TLS → insecure as last resort)
@@ -1252,11 +1253,21 @@ def send_one(line, product: str, attr_fields: dict, event_time: float | None = N
                 headers = {**headers_auth, "Content-Type": "application/json"}
                 resp = POST(url, headers=headers, json=payload, timeout=10)
             else:
-                url = f"{_CONNECTION_CACHE['raw_base']}?{_build_qs(product)}"
+                # Raw payload → /raw (legacy), with JSON /event fallback.
+                raw_url = f"{_CONNECTION_CACHE['raw_base']}?{_build_qs(product)}"
                 payload = line
                 headers = {**headers_auth, "Content-Type": "text/plain"}
-                resp = POST(url, headers=headers, data=payload, timeout=10)
-            
+                resp = POST(raw_url, headers=headers, data=payload, timeout=10)
+
+                if resp.status_code >= 400:
+                    event_url = _CONNECTION_CACHE['raw_base'].replace("/raw", "/event")
+                    payload = {
+                        "event": line,
+                        "sourcetype": SOURCETYPE_MAP.get(product, product)
+                    }
+                    headers = {**headers_auth, "Content-Type": "application/json"}
+                    resp = POST(event_url, headers=headers, data=json.dumps(payload), timeout=10)
+
             resp.raise_for_status()
             try:
                 return resp.json()
@@ -1288,16 +1299,26 @@ def send_one(line, product: str, attr_fields: dict, event_time: float | None = N
                             print(f"[DEBUG] Sending to {url}")
                             print(f"[DEBUG] Sourcetype: {payload.get('sourcetype')}")
                             print(f"[DEBUG] Payload: {payload}")
+                            print("DEBUG URL:", url)
                         resp = POST(url, headers=headers, json=payload, timeout=10)
                     else:
-                        # Raw payload → /raw
-                        url = f"{raw_base}?{_build_qs(product)}"
+                        # Raw payload → /raw (legacy), with JSON /event fallback.
+                        raw_url = f"{raw_base}?{_build_qs(product)}"
                         payload = line
                         headers = {**headers_auth, "Content-Type": "text/plain"}
                         if DEBUG:
-                            print(f"[DEBUG] Sending to {url}")
+                            print(f"[DEBUG] Sending to {raw_url}")
                             print(f"[DEBUG] Payload (first 200 chars): {str(payload)[:200]}")
-                        resp = POST(url, headers=headers, data=payload, timeout=10)
+                        resp = POST(raw_url, headers=headers, data=payload, timeout=10)
+
+                        if resp.status_code >= 400:
+                            event_url = raw_base.replace("/raw", "/event")
+                            json_payload = {
+                                "event": line,
+                                "sourcetype": SOURCETYPE_MAP.get(product, product)
+                            }
+                            json_headers = {**headers_auth, "Content-Type": "application/json"}
+                            resp = POST(event_url, headers=json_headers, data=json.dumps(json_payload), timeout=10)
 
                     # If unauthorized with Splunk, retry with Bearer (handled by loop)
                     if resp.status_code in (401, 403) and scheme == auth_schemes[0]:
